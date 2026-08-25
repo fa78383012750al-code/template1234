@@ -163,6 +163,82 @@ const inputSchema = z
   })
   .passthrough();
 
+type HtmlConversion = { elements: DocumentElement[]; issues: string[] };
+
+const HTML_SAMPLE = `<h1>عنوان المستند</h1>
+<p>اكتب هنا النص الذي تريد طباعته داخل المستند.</p>
+<h2>بيانات أساسية</h2>
+<ul><li>النقطة الأولى</li><li>النقطة الثانية</li></ul>
+<table><thead><tr><th>البند</th><th>القيمة</th></tr></thead><tbody><tr><td>العام</td><td>1447هـ</td></tr></tbody></table>`;
+
+function htmlId(prefix: string) {
+  return `${prefix}-${crypto.randomUUID?.() || Math.random().toString(36).slice(2)}`;
+}
+
+function nodeText(node: Element) {
+  return (node.textContent || "").replace(/\s+/g, " ").trim();
+}
+
+function convertHtmlTable(table: HTMLTableElement): DocumentElement | null {
+  const cells: NonNullable<DocumentElement["cells"]> = [];
+  let maxCols = 0;
+  let hasHeader = false;
+  Array.from(table.rows).forEach((row, rowIndex) => {
+    let column = 1;
+    Array.from(row.cells).forEach((cell) => {
+      while (cells.some((item) => item.r <= rowIndex + 1 && item.r + (item.rowSpan || 1) > rowIndex + 1 && item.c <= column && item.c + (item.colSpan || 1) > column)) column += 1;
+      const colSpan = Math.max(1, cell.colSpan || 1);
+      const rowSpan = Math.max(1, cell.rowSpan || 1);
+      cells.push({ r: rowIndex + 1, c: column, text: nodeText(cell), rowSpan, colSpan, align: "c", v: false });
+      column += colSpan;
+      maxCols = Math.max(maxCols, column - 1);
+      if (cell.tagName.toLowerCase() === "th") hasHeader = true;
+    });
+  });
+  return cells.length && maxCols ? { id: htmlId("table"), type: "table", cols: maxCols, noHeader: !hasHeader, cells } : null;
+}
+
+function convertHtmlToElements(html: string): HtmlConversion {
+  const parser = new DOMParser();
+  const parsed = parser.parseFromString(html, "text/html");
+  const issues: string[] = [];
+  parsed.querySelectorAll("script, style, iframe, object, embed, link, meta, form, input, button, svg").forEach((node) => node.remove());
+
+  const convertNode = (node: Element): DocumentElement[] => {
+    const tag = node.tagName.toLowerCase();
+    const text = nodeText(node);
+    if (!text && tag !== "img" && tag !== "hr" && tag !== "table") return [];
+    if (tag === "h1") return [{ id: htmlId("title"), type: "title", text }];
+    if (["h2", "h3", "h4", "h5", "h6"].includes(tag)) return [{ id: htmlId("heading"), type: "heading", text }];
+    if (["p", "pre"].includes(tag)) return [{ id: htmlId("paragraph"), type: "paragraph", text }];
+    if (["ul", "ol"].includes(tag)) {
+      const items = Array.from(node.querySelectorAll(":scope > li")).map((item) => nodeText(item)).filter(Boolean);
+      return items.length ? [{ id: htmlId("list"), type: "list", items }] : [];
+    }
+    if (tag === "hr") return [{ id: htmlId("divider"), type: "divider" }];
+    if (tag === "blockquote") return [{ id: htmlId("box"), type: "box", title: "ملاحظة", text }];
+    if (tag === "table") {
+      const converted = convertHtmlTable(node as HTMLTableElement);
+      return converted ? [converted] : [];
+    }
+    if (tag === "img") {
+      const src = (node.getAttribute("src") || "").trim();
+      if (/^(https?:\/\/|data:image\/)/i.test(src)) return [{ id: htmlId("figure"), type: "figure", src }];
+      issues.push("تم تجاهل صورة بمسار غير آمن أو غير صالح.");
+      return [];
+    }
+    if (["article", "section", "main", "div", "figure"].includes(tag)) {
+      const children = Array.from(node.children).flatMap(convertNode);
+      return children.length ? children : text ? [{ id: htmlId("paragraph"), type: "paragraph", text }] : [];
+    }
+    if (tag === "br") return [];
+    issues.push(`تم تبسيط الوسم <${tag}> إلى نص قابل للطباعة.`);
+    return [{ id: htmlId("paragraph"), type: "paragraph", text }];
+  };
+
+  return { elements: Array.from(parsed.body.children).flatMap(convertNode), issues };
+}
+
 function createDemoSchema(): DocumentSchema {
   return {
     meta: { title: "سجل متابعة الأداء — الفصل الدراسي الأول", size: "A4", orientation: "portrait", template: "official" },
@@ -444,6 +520,9 @@ function DocumentSheet({ document, page, index, total, zoom, sheetRef }: { docum
 export default function Home() {
   const [document, setDocument] = useState<DocumentSchema>(initialDocument);
   const [rawJson, setRawJson] = useState(() => JSON.stringify(initialDocument, null, 2));
+  const [rawHtml, setRawHtml] = useState(HTML_SAMPLE);
+  const [sourceMode, setSourceMode] = useState<"json" | "html">("json");
+  const [htmlIssues, setHtmlIssues] = useState<string[]>([]);
   const [zoom, setZoom] = useState(0.68);
   const [activePanel, setActivePanel] = useState<"studio" | "schema" | "versions">("studio");
   const [versions, setVersions] = useState(getVersions);
@@ -477,6 +556,22 @@ export default function Home() {
     }
     syncDocument(analysis.value);
     setToast("تم تطبيق البنية بنجاح، والمعاينة محدثة الآن.");
+  };
+
+  const applyHtml = () => {
+    if (!rawHtml.trim()) {
+      setToast("الصق HTML داخل المحرر أولًا.");
+      return;
+    }
+    const converted = convertHtmlToElements(rawHtml);
+    setHtmlIssues(converted.issues);
+    if (!converted.elements.length) {
+      setToast("لم نجد عناصر HTML قابلة للتحويل. استخدم عناوين أو فقرات أو قوائم أو جداول.");
+      return;
+    }
+    const next: DocumentSchema = { ...document, pages: [{ id: "html-page-1", elements: converted.elements }] };
+    syncDocument(next);
+    setToast(`تم تحويل HTML إلى ${converted.elements.length} عنصرًا منظمًا داخل المعاينة.`);
   };
 
   const loadExample = () => {
@@ -561,7 +656,7 @@ export default function Home() {
           <button className={activePanel === "schema" ? "active" : ""} onClick={() => setActivePanel("schema")}><Code2 /><span>بنية JSON</span></button>
           <button className={activePanel === "versions" ? "active" : ""} onClick={() => setActivePanel("versions")}><RotateCcw /><span>الإصدارات</span></button>
         </nav>
-        <div className="rail-note"><span className="note-rule" /><p><strong>JSON أولًا</strong>تتحول البيانات المنظمة إلى صفحة قابلة للطباعة دون نسخ يدوي.</p></div>
+        <div className="rail-note"><span className="note-rule" /><p><strong>مصدر محكوم</strong>JSON للتصميم الدقيق، وHTML للمحتوى النصي القابل للتحويل والطباعة.</p></div>
       </aside>
 
       <section className="control-column">
@@ -577,7 +672,7 @@ export default function Home() {
           </section>
           <section className="source-bridge">
             <div className="source-bridge__heading"><span className="section-index">SOURCE / JSON</span><span className={analysis.ok ? "source-health healthy" : "source-health warning"}>{analysis.ok ? "مُدقّق" : "يتطلب تدقيقًا"}</span></div>
-            <div className="source-bridge__body"><Code2 size={23} /><div><b>مصدر المستند</b><p>JSON هو مرجع المحتوى الوحيد. عدّل المصدر ثم طبّقه على المعاينة.</p></div><button onClick={() => setActivePanel("schema")}>فتح المصدر <ChevronLeft size={15} /></button></div>
+            <div className="source-bridge__body"><Code2 size={23} /><div><b>مصدر المستند</b><p>استخدم JSON للتصميم المتكامل، أو HTML لتحويل المحتوى النصي إلى عناصر مرتبة.</p></div><button onClick={() => setActivePanel("schema")}>فتح المصدر <ChevronLeft size={15} /></button></div>
             <code>{`{ "pages": ${document.pages.length}, "elements": ${document.pages.reduce((count, page) => count + page.elements.length, 0)} }`}</code>
           </section>
           <section className="section-block">
@@ -619,12 +714,21 @@ export default function Home() {
         </div>}
 
         {activePanel === "schema" && <div className="panel-stack schema-panel">
-          <section className="schema-intro" style={{ backgroundImage: `linear-gradient(90deg, rgba(38,62,85,.96), rgba(38,62,85,.72)), url(${STRUCTURE_URL})` }}><span className="hero-tag hero-tag--dark"><Code2 size={14} /> طبقة المصدر</span><h2>لا تحلل الملفات هنا.</h2><p>حلل أي PDF أو صورة في أداة ذكاء خارجية باستخدام البرومبت الصارم، ثم الصق JSON الناتج فقط في هذا المحرر.</p></section>
-          <section className="prompt-card"><div><span className="section-index">EXTERNAL AI / PROMPT</span><h3>برومبت صارم للتحليل صفحةً صفحةً</h3><p>انسخه ثم أرفقه بالملف داخل أداة الذكاء التي تختارها. ستعيد الأداة JSON فقط قابلًا للّصق.</p></div><button onClick={copyPrompt}><Copy size={15} /> نسخ البرومبت</button><textarea readOnly className="prompt-editor" dir="rtl" value={AI_ANALYSIS_PROMPT} aria-label="برومبت تحليل المستند الخارجي" /></section>
-          <div className="schema-toolbar"><span className={analysis.ok ? "analysis-ok" : "analysis-error"}>{analysis.ok ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}{analysis.ok ? "البنية قابلة للتطبيق" : "تحتاج البنية إلى تصحيح"}</span><button onClick={loadExample}><FilePlus2 size={15} /> نموذج جاهز</button></div>
-          <textarea className="json-editor" dir="ltr" spellCheck={false} value={rawJson} onChange={(event) => setRawJson(event.target.value)} aria-label="محرر JSON" />
-          <div className="diagnostic-list">{analysis.issues.length ? analysis.issues.slice(0, 8).map((issue, index) => <div className={`diagnostic ${issue.severity}`} key={`${issue.path}-${index}`}><span>{issue.severity === "error" ? <AlertTriangle size={15} /> : <AlertTriangle size={15} />}</span><div><b>{issue.path}</b><p>{issue.message}</p></div></div>) : <div className="diagnostic success"><CheckCircle2 size={16} /><div><b>فحص بنيوي مكتمل</b><p>المعرّفات فريدة، والعناصر المدعومة قابلة للعرض والطباعة.</p></div></div>}</div>
-          <Button className="apply-json" onClick={applyJson}><ClipboardPaste size={17} /> تطبيق البنية في المعاينة</Button>
+          <section className="schema-intro" style={{ backgroundImage: `linear-gradient(90deg, rgba(38,62,85,.96), rgba(38,62,85,.72)), url(${STRUCTURE_URL})` }}><span className="hero-tag hero-tag--dark"><Code2 size={14} /> طبقة المصدر</span><h2>الصق بنية أو محتوى.</h2><p>استخدم JSON للمستندات المنظمة، أو ألصق HTML نظيفًا لتحويله تلقائيًا إلى عناصر قابلة للطباعة دون تشغيل أي كود داخله.</p></section>
+          <div className="source-mode-switch" role="tablist" aria-label="صيغة مصدر المحتوى"><button role="tab" aria-selected={sourceMode === "json"} className={sourceMode === "json" ? "active" : ""} onClick={() => setSourceMode("json")}><Code2 size={15} /> JSON منظّم</button><button role="tab" aria-selected={sourceMode === "html"} className={sourceMode === "html" ? "active" : ""} onClick={() => setSourceMode("html")}><FileText size={15} /> HTML محتوى</button></div>
+          {sourceMode === "json" ? <>
+            <section className="prompt-card"><div><span className="section-index">EXTERNAL AI / PROMPT</span><h3>برومبت صارم للتحليل صفحةً صفحةً</h3><p>انسخه ثم أرفقه بالملف داخل أداة الذكاء التي تختارها. ستعيد الأداة JSON فقط قابلًا للّصق.</p></div><button onClick={copyPrompt}><Copy size={15} /> نسخ البرومبت</button><textarea readOnly className="prompt-editor" dir="rtl" value={AI_ANALYSIS_PROMPT} aria-label="برومبت تحليل المستند الخارجي" /></section>
+            <div className="schema-toolbar"><span className={analysis.ok ? "analysis-ok" : "analysis-error"}>{analysis.ok ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}{analysis.ok ? "البنية قابلة للتطبيق" : "تحتاج البنية إلى تصحيح"}</span><button onClick={loadExample}><FilePlus2 size={15} /> نموذج جاهز</button></div>
+            <textarea className="json-editor" dir="ltr" spellCheck={false} value={rawJson} onChange={(event) => setRawJson(event.target.value)} aria-label="محرر JSON" />
+            <div className="diagnostic-list">{analysis.issues.length ? analysis.issues.slice(0, 8).map((issue, index) => <div className={`diagnostic ${issue.severity}`} key={`${issue.path}-${index}`}><span><AlertTriangle size={15} /></span><div><b>{issue.path}</b><p>{issue.message}</p></div></div>) : <div className="diagnostic success"><CheckCircle2 size={16} /><div><b>فحص بنيوي مكتمل</b><p>المعرّفات فريدة، والعناصر المدعومة قابلة للعرض والطباعة.</p></div></div>}</div>
+            <Button className="apply-json" onClick={applyJson}><ClipboardPaste size={17} /> تطبيق البنية في المعاينة</Button>
+          </> : <>
+            <section className="html-help"><span className="section-index">SAFE HTML / CONTENT</span><h3>الصق محتوى HTML فقط</h3><p>تُقبل العناوين والفقرات والقوائم والجداول والصور ذات روابط موثوقة. تُحذف تلقائيًا الوسوم البرمجية مثل script وstyle وiframe وأي نماذج أو أزرار.</p><code>&lt;h1&gt;عنوان&lt;/h1&gt; · &lt;p&gt;فقرة&lt;/p&gt; · &lt;ul&gt;...&lt;/ul&gt; · &lt;table&gt;...&lt;/table&gt;</code></section>
+            <div className="schema-toolbar"><span className="analysis-ok"><CheckCircle2 size={16} />تحويل آمن إلى عناصر مستند</span><button onClick={() => setRawHtml(HTML_SAMPLE)}><FilePlus2 size={15} /> مثال HTML</button></div>
+            <textarea className="json-editor html-editor" dir="rtl" spellCheck={false} value={rawHtml} onChange={(event) => setRawHtml(event.target.value)} aria-label="محرر HTML" />
+            <div className="diagnostic-list">{htmlIssues.length ? htmlIssues.slice(0, 6).map((issue, index) => <div className="diagnostic warning" key={`${issue}-${index}`}><span><AlertTriangle size={15} /></span><div><b>HTML</b><p>{issue}</p></div></div>) : <div className="diagnostic success"><CheckCircle2 size={16} /><div><b>التحويل لا ينفّذ أكوادًا</b><p>ألصق المحتوى، ثم حوّله إلى عناصر منظمة داخل صفحة المستند.</p></div></div>}</div>
+            <Button className="apply-json apply-html" onClick={applyHtml}><ClipboardPaste size={17} /> تحويل HTML إلى المعاينة</Button>
+          </>}
         </div>}
 
         {activePanel === "versions" && <div className="panel-stack">
