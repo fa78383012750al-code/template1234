@@ -149,7 +149,7 @@ const inputSchema = z
       .object({ title: z.string().optional(), size: z.string().optional(), orientation: z.string().optional(), template: z.string().optional() })
       .optional(),
     header: z
-      .object({ mode: z.string().optional(), type: z.string().optional(), imageData: z.string().optional(), headerImage: z.unknown().optional(), rightLines: z.array(z.string()).optional(), leftLines: z.array(z.string()).optional(), logoImage: z.unknown().optional() })
+      .object({ mode: z.string().optional(), type: z.string().optional(), imageData: z.string().nullable().optional(), headerImage: z.unknown().optional(), rightLines: z.array(z.string()).optional(), leftLines: z.array(z.string()).optional(), logoImage: z.unknown().optional() })
       .optional(),
     footer: z
       .object({ signatures: z.array(z.object({ role: z.string().optional(), name: z.string().optional() })).optional(), showPageNum: z.boolean().optional(), showSignatureLine: z.boolean().optional() })
