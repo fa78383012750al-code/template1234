@@ -206,6 +206,8 @@ function vitePluginStorageProxy(): Plugin {
 const plugins = [react(), tailwindcss(), jsxLocPlugin(), vitePluginManusRuntime(), vitePluginManusDebugCollector(), vitePluginStorageProxy()];
 
 export default defineConfig({
+  // عند بناء GitHub Pages يُنشر التطبيق من مسار المستودع لا من جذر النطاق.
+  base: process.env.GITHUB_PAGES === "true" ? "/template1234/" : "/",
   plugins,
   resolve: {
     alias: {

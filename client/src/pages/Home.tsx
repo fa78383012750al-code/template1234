@@ -28,10 +28,11 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
-const LOGO_URL = "/manus-storage/document-studio-logo_8fcefdab.png";
-const HERO_URL = "/manus-storage/editorial-canvas-hero_7458903c.jpg";
-const STRUCTURE_URL = "/manus-storage/json-structure-art_fb7c462b.jpg";
-const CALIBRATION_URL = "/manus-storage/print-calibration-art_6479904c.jpg";
+const assetUrl = (filename: string) => `${import.meta.env.BASE_URL}assets/${filename}`;
+const LOGO_URL = assetUrl("document-studio-logo.png");
+const HERO_URL = assetUrl("editorial-canvas-hero.jpg");
+const STRUCTURE_URL = assetUrl("json-structure-art.jpg");
+const CALIBRATION_URL = assetUrl("print-calibration-art.jpg");
 const STORAGE_KEY = "studio-document-engine-v3";
 const VERSIONS_KEY = "studio-document-engine-versions-v3";
 
