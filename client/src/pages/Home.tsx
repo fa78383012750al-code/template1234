@@ -11,19 +11,25 @@ import {
   CheckCircle2,
   ChevronLeft,
   ClipboardPaste,
+  Copy,
   Code2,
   Download,
   FileCheck2,
   FilePlus2,
   FileText,
+  ImagePlus,
   LayoutTemplate,
   Minus,
+  Palette,
   Plus,
   Printer,
   RotateCcw,
   Save,
   Settings2,
   Sparkles,
+  Type,
+  Upload,
+  X,
   ZoomIn,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -79,13 +85,16 @@ type DocumentElement = {
 
 type DocumentSchema = {
   meta: { title: string; size: PaperSize; orientation: "portrait" | "landscape"; template: TemplateKey };
-  header: { rightLines: string[]; leftLines: string[]; logoImage?: { data: string } | null };
-  footer: { signatures: Array<{ role: string; name: string }>; showPageNum: boolean };
+  header: { mode: "text" | "image"; imageData?: string | null; rightLines: string[]; leftLines: string[]; logoImage?: { data: string } | null };
+  footer: { signatures: Array<{ role: string; name: string }>; showPageNum: boolean; showSignatureLine: boolean };
+  styles: { bodyFont: string; bodySize: number; headingFont: string; headingColor: string; headingSize: number };
   pages: Array<{ id: string; elements: DocumentElement[] }>;
 };
 
-type TemplateKey = "official" | "education" | "record";
+type TemplateKey = "official" | "royal" | "emerald" | "burgundy" | "platinum" | "sand" | "education" | "record";
 type Issue = { path: string; message: string; severity: "error" | "warning" };
+
+const ARABIC_FONTS = ["Cairo", "IBM Plex Sans Arabic", "Tajawal", "Almarai", "Noto Naskh Arabic", "Amiri", "Readex Pro", "Changa", "Mada", "Harmattan", "Scheherazade New"];
 
 const elementLabels: Record<ElementKind, string> = {
   title: "عنوان رئيسي",
@@ -102,9 +111,37 @@ const elementLabels: Record<ElementKind, string> = {
 
 const templates: Record<TemplateKey, { name: string; description: string; ink: string; paper: string }> = {
   official: { name: "رسمي دقيق", description: "هيكل واضح للمراسلات والسجلات الإدارية.", ink: "#263E55", paper: "#F4F0E9" },
+  royal: { name: "كحلي ملكي", description: "كحلي عميق ولمسة ذهبية هادئة للمراسلات الرفيعة.", ink: "#173A5E", paper: "#F4F0E4" },
+  emerald: { name: "زمردي رسمي", description: "أخضر رصين مناسب للمنشآت التعليمية والمؤسسية.", ink: "#17614F", paper: "#EDF4EF" },
+  burgundy: { name: "عنابي فاخر", description: "عنابي متزن بمظهر إداري أنيق وتقليدي.", ink: "#6C2940", paper: "#F7EEF0" },
+  platinum: { name: "بلاتيني إداري", description: "حبر فحمي رمادي مع ورق بارد لتقارير البيانات.", ink: "#3E4C5A", paper: "#F0F2F3" },
+  sand: { name: "رملي نبيل", description: "بني هادئ وورق عاجي للمذكرات والخطط الرسمية.", ink: "#654936", paper: "#F8F1E5" },
   education: { name: "تعليمي منظم", description: "تباين لطيف ومناسب للخطط والنماذج التعليمية.", ink: "#215C55", paper: "#EEF4EF" },
   record: { name: "سجل بيانات", description: "معالجة كثيفة للجداول والتقارير ذات التفاصيل المتكررة.", ink: "#563C35", paper: "#F6EFEA" },
 };
+
+const AI_ANALYSIS_PROMPT = `أنت محلل مستندات عربي شديد الدقة. سأرسل لك ملفًا أو صور صفحات مستند. حلله صفحةً صفحةً ثم أعد «JSON واحدًا فقط» صالحًا للنسخ المباشر إلى محرك تصميم المستندات.
+
+قواعد صارمة لا يجوز مخالفتها:
+1) لا تكتب أي شرح أو مقدمة أو خاتمة أو Markdown أو \`\`\`json. أخرج كائن JSON فقط.
+2) افحص كل صفحة بصريًا قبل كتابة النتيجة. لا تخمّن نصًا غير واضح؛ استخدم "[غير واضح]" عند الضرورة.
+3) احتفظ بتسلسل القراءة العربي وبكل الفقرات والعناوين والقوائم والبيانات دون تلخيص أو دمج.
+4) استخرج عنوان المستند الرسمي في meta.title؛ هذا الاسم سيظهر في نافذة الطباعة.
+5) ضع الترويسة الثابتة المتكررة في header: rightLines لجهة المملكة/الوزارة/الإدارة، وleftLines لاسم المستند واسم الجهة/المدرسة. لا تنشئ شعارًا أو صورة أو بيانات لم تظهر في الملف.
+6) ضع تذييل المسؤولين في footer.signatures. كل عنصر هو {"role":"المسمى الوظيفي","name":"الاسم"}. فعّل showSignatureLine فقط إن كانت هناك مساحة أو طلب للتوقيع.
+7) أنشئ كائن pages، ولكل صفحة id فريد وعناصرها بالترتيب المرئي. الأنواع المسموحة فقط: title, heading, paragraph, list, infoGrid, box, divider, signature, table, figure.
+8) للجداول: اكتب كل الخلايا بما فيها الفارغة. استخدم r وc بدءًا من 1، وrowSpan وcolSpan للخلايا المدمجة، وcols لعدد الأعمدة. لا تحوّل الجدول إلى نص أو قائمة.
+9) استخدم figure فقط إذا زودتك برابط صورة صالح. لا تضع data URL للصورة داخل JSON.
+10) تأكد أن JSON صالح تمامًا: اقتباسات مزدوجة، لا تعليقات، لا فواصل زائدة، معرفات فريدة، وصفحة واحدة لكل صفحة مصدر.
+
+استخدم هذا القالب حرفيًا ثم املأ القيم:
+{
+  "meta": { "title": "العنوان الرسمي", "size": "A4", "orientation": "portrait", "template": "official" },
+  "header": { "mode": "text", "rightLines": ["المملكة العربية السعودية", "وزارة التعليم", "الإدارة العامة بمنطقة ..."], "leftLines": ["اسم الملف", "اسم المدرسة"], "logoImage": null },
+  "footer": { "signatures": [{ "role": "المسمى الوظيفي", "name": "الاسم" }], "showPageNum": true, "showSignatureLine": true },
+  "styles": { "bodyFont": "Cairo", "bodySize": 14, "headingFont": "Cairo", "headingColor": "#263E55", "headingSize": 18 },
+  "pages": [{ "id": "p1", "elements": [] }]
+}`;
 
 const inputSchema = z
   .object({
@@ -112,10 +149,13 @@ const inputSchema = z
       .object({ title: z.string().optional(), size: z.string().optional(), orientation: z.string().optional(), template: z.string().optional() })
       .optional(),
     header: z
-      .object({ rightLines: z.array(z.string()).optional(), leftLines: z.array(z.string()).optional(), logoImage: z.unknown().optional() })
+      .object({ mode: z.string().optional(), type: z.string().optional(), imageData: z.string().optional(), headerImage: z.unknown().optional(), rightLines: z.array(z.string()).optional(), leftLines: z.array(z.string()).optional(), logoImage: z.unknown().optional() })
       .optional(),
     footer: z
-      .object({ signatures: z.array(z.object({ role: z.string().optional(), name: z.string().optional() })).optional(), showPageNum: z.boolean().optional() })
+      .object({ signatures: z.array(z.object({ role: z.string().optional(), name: z.string().optional() })).optional(), showPageNum: z.boolean().optional(), showSignatureLine: z.boolean().optional() })
+      .optional(),
+    styles: z
+      .object({ bodyFont: z.string().optional(), bodySize: z.number().optional(), headingFont: z.string().optional(), headingColor: z.string().optional(), headingSize: z.number().optional() })
       .optional(),
     pages: z
       .array(z.object({ id: z.string().min(1), elements: z.array(z.object({ id: z.string().min(1), type: z.string().min(1) }).passthrough()) }))
@@ -127,6 +167,8 @@ function createDemoSchema(): DocumentSchema {
   return {
     meta: { title: "سجل متابعة الأداء — الفصل الدراسي الأول", size: "A4", orientation: "portrait", template: "official" },
     header: {
+      mode: "text",
+      imageData: null,
       rightLines: ["المملكة العربية السعودية", "وزارة التعليم", "الإدارة العامة للتعليم"],
       leftLines: ["سجل متابعة الأداء", "مدرسة النور الابتدائية"],
       logoImage: null,
@@ -137,7 +179,9 @@ function createDemoSchema(): DocumentSchema {
         { role: "قائد المدرسة", name: "" },
       ],
       showPageNum: true,
+      showSignatureLine: true,
     },
+    styles: { bodyFont: "Cairo", bodySize: 14, headingFont: "Cairo", headingColor: "#263E55", headingSize: 18 },
     pages: [
       {
         id: "p1",
@@ -281,13 +325,18 @@ function validateAndNormalize(raw: string): { ok: true; value: DocumentSchema; i
 
   if (issues.some((issue) => issue.severity === "error")) return { ok: false, issues };
   const headerInput = input.header?.logoImage as { data?: unknown } | undefined;
+  const legacyHeaderImage = input.header?.headerImage as { data?: unknown } | undefined;
+  const imageData = input.header?.imageData || (typeof legacyHeaderImage?.data === "string" ? legacyHeaderImage.data : null);
+  const headerMode = input.header?.mode === "image" || input.header?.type === "image" ? "image" : "text";
+  const styleInput = input.styles || {};
   return {
     ok: true,
     issues,
     value: {
       meta: { title: input.meta?.title?.trim() || "مستند غير معنون", size, orientation, template },
-      header: { rightLines: input.header?.rightLines || [], leftLines: input.header?.leftLines || [], logoImage: typeof headerInput?.data === "string" ? { data: headerInput.data } : null },
-      footer: { signatures: (input.footer?.signatures || []).map((signature) => ({ role: signature.role || "", name: signature.name || "" })), showPageNum: input.footer?.showPageNum !== false },
+      header: { mode: headerMode, imageData, rightLines: input.header?.rightLines || [], leftLines: input.header?.leftLines || [], logoImage: typeof headerInput?.data === "string" ? { data: headerInput.data } : null },
+      footer: { signatures: (input.footer?.signatures || []).map((signature) => ({ role: signature.role || "", name: signature.name || "" })), showPageNum: input.footer?.showPageNum !== false, showSignatureLine: input.footer?.showSignatureLine !== false },
+      styles: { bodyFont: ARABIC_FONTS.includes(styleInput.bodyFont || "") ? styleInput.bodyFont || "Cairo" : "Cairo", bodySize: Math.min(18, Math.max(10, styleInput.bodySize || 14)), headingFont: ARABIC_FONTS.includes(styleInput.headingFont || "") ? styleInput.headingFont || "Cairo" : "Cairo", headingColor: /^#[0-9a-fA-F]{6}$/.test(styleInput.headingColor || "") ? styleInput.headingColor || "#263E55" : "#263E55", headingSize: Math.min(30, Math.max(13, styleInput.headingSize || 18)) },
       pages,
     },
   };
@@ -372,15 +421,19 @@ function DocumentSheet({ document, page, index, total, zoom, sheetRef }: { docum
   const template = templates[document.meta.template];
   return (
     <div className="sheet-scale" style={{ "--zoom": zoom } as React.CSSProperties}>
-      <article ref={sheetRef} className={`document-sheet template-${document.meta.template}`} style={{ "--sheet-w": `${width}mm`, "--sheet-h": `${height}mm`, "--ink": template.ink, "--paper": template.paper } as React.CSSProperties}>
-        <header className="document-header">
-          <div className="header-lines header-lines--right">{document.header.rightLines.map((line, lineIndex) => <span key={lineIndex}>{line}</span>)}</div>
-          <div className="document-seal">{document.header.logoImage?.data ? <img src={document.header.logoImage.data} alt="شعار المستند" /> : <img src={LOGO_URL} alt="علامة محرك المستندات" />}</div>
-          <div className="header-lines header-lines--left">{document.header.leftLines.map((line, lineIndex) => <span key={lineIndex}>{line}</span>)}</div>
-        </header>
+      <article ref={sheetRef} className={`document-sheet template-${document.meta.template}`} style={{ "--sheet-w": `${width}mm`, "--sheet-h": `${height}mm`, "--ink": template.ink, "--paper": template.paper, "--body-font": document.styles.bodyFont, "--body-size": `${document.styles.bodySize}px`, "--heading-font": document.styles.headingFont, "--heading-color": document.styles.headingColor, "--heading-size": `${document.styles.headingSize}px` } as React.CSSProperties}>
+        {document.header.mode === "image" && document.header.imageData ? (
+          <header className="document-header document-header--image"><img src={document.header.imageData} alt="ترويسة المستند" /></header>
+        ) : (
+          <header className="document-header">
+            <div className="header-lines header-lines--right">{document.header.rightLines.map((line, lineIndex) => <span key={lineIndex}>{line}</span>)}</div>
+            <div className="document-seal">{document.header.logoImage?.data ? <img src={document.header.logoImage.data} alt="شعار المستند" /> : <img src={LOGO_URL} alt="علامة محرك المستندات" />}</div>
+            <div className="header-lines header-lines--left">{document.header.leftLines.map((line, lineIndex) => <span key={lineIndex}>{line}</span>)}</div>
+          </header>
+        )}
         <main className="document-content">{page.elements.map((element) => <DocumentElementView key={element.id} element={element} />)}</main>
         <footer className="document-footer">
-          {document.footer.signatures.length > 0 && <div className="footer-signatures">{document.footer.signatures.map((signature, signatureIndex) => <div key={signatureIndex}><strong>{signature.role}</strong><span>{signature.name || "الاسم والتوقيع"}</span></div>)}</div>}
+          {document.footer.signatures.length > 0 && <div className={`footer-signatures ${document.footer.showSignatureLine ? "footer-signatures--line" : ""}`}>{document.footer.signatures.map((signature, signatureIndex) => <div key={signatureIndex}><strong>{signature.role}</strong><span>{signature.name || "الاسم"}</span>{document.footer.showSignatureLine && <i>التوقيع</i>}</div>)}</div>}
           {document.footer.showPageNum && <span className="page-number">صفحة {index + 1} من {total}</span>}
         </footer>
       </article>
@@ -401,6 +454,10 @@ export default function Home() {
   useEffect(() => {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(document)); } catch { /* quota is non-blocking */ }
   }, [document]);
+
+  useEffect(() => {
+    window.document.title = document.meta.title || "محرك تصميم المستندات";
+  }, [document.meta.title]);
 
   useEffect(() => {
     if (!toast) return;
@@ -432,6 +489,40 @@ export default function Home() {
     syncDocument({ ...document, meta: { ...document.meta, [key]: value } });
   };
 
+  const updateStyles = <K extends keyof DocumentSchema["styles"]>(key: K, value: DocumentSchema["styles"][K]) => {
+    syncDocument({ ...document, styles: { ...document.styles, [key]: value } });
+  };
+
+  const updateHeader = (patch: Partial<DocumentSchema["header"]>) => syncDocument({ ...document, header: { ...document.header, ...patch } });
+
+  const updateFooter = (patch: Partial<DocumentSchema["footer"]>) => syncDocument({ ...document, footer: { ...document.footer, ...patch } });
+
+  const updateSignature = (index: number, key: "role" | "name", value: string) => {
+    const signatures = [...document.footer.signatures];
+    while (signatures.length <= index) signatures.push({ role: "", name: "" });
+    signatures[index] = { ...signatures[index], [key]: value };
+    updateFooter({ signatures });
+  };
+
+  const readImage = (file: File, kind: "header" | "logo") => {
+    if (!file.type.startsWith("image/")) { setToast("اختر ملف صورة صالحًا فقط."); return; }
+    if (file.size > 6 * 1024 * 1024) { setToast("حجم الصورة كبير؛ استخدم صورة أقل من 6 ميغابايت."); return; }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const data = typeof reader.result === "string" ? reader.result : "";
+      if (!data) return;
+      if (kind === "header") updateHeader({ mode: "image", imageData: data });
+      else updateHeader({ logoImage: { data } });
+      setToast(kind === "header" ? "تمت إضافة ترويسة الصورة وإخفاء النصوص في المعاينة." : "تم إدراج الشعار في وسط الترويسة النصية.");
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const copyPrompt = async () => {
+    try { await navigator.clipboard.writeText(AI_ANALYSIS_PROMPT); setToast("تم نسخ البرومبت الصارم. أرسله مع الملف إلى أداة الذكاء الخارجية."); }
+    catch { setToast("تعذر النسخ التلقائي؛ انسخ النص يدويًا من مربع البرومبت."); }
+  };
+
   const downloadSchema = () => {
     const blob = new Blob([JSON.stringify(document, null, 2)], { type: "application/json;charset=utf-8" });
     const url = URL.createObjectURL(blob);
@@ -455,7 +546,7 @@ export default function Home() {
   };
 
   const clearWorkspace = () => {
-    const empty: DocumentSchema = { ...createDemoSchema(), meta: { title: "مستند جديد", size: "A4", orientation: "portrait", template: "official" }, header: { rightLines: [], leftLines: [], logoImage: null }, footer: { signatures: [], showPageNum: true }, pages: [{ id: "p1", elements: [] }] };
+    const empty: DocumentSchema = { ...createDemoSchema(), meta: { title: "مستند جديد", size: "A4", orientation: "portrait", template: "official" }, header: { mode: "text", imageData: null, rightLines: [], leftLines: [], logoImage: null }, footer: { signatures: [], showPageNum: true, showSignatureLine: true }, styles: { bodyFont: "Cairo", bodySize: 14, headingFont: "Cairo", headingColor: "#263E55", headingSize: 18 }, pages: [{ id: "p1", elements: [] }] };
     syncDocument(empty);
     setToast("تم إنشاء مساحة مستند نظيفة.");
   };
@@ -497,18 +588,39 @@ export default function Home() {
               <label className="field-label">الاتجاه<select value={document.meta.orientation} onChange={(event) => updateMeta("orientation", event.target.value as "portrait" | "landscape")}><option value="portrait">عمودي</option><option value="landscape">أفقي</option></select></label>
             </div>
           </section>
+          <section className="section-block identity-section">
+            <div className="section-title"><div><span className="section-index">02</span><h2>الترويسة وهوية الجهة</h2></div><ImagePlus size={18} /></div>
+            <div className="mode-switch"><button className={document.header.mode === "text" ? "active" : ""} onClick={() => updateHeader({ mode: "text" })}>ترويسة نصية</button><button className={document.header.mode === "image" ? "active" : ""} onClick={() => updateHeader({ mode: "image" })}>ترويسة صورة كاملة</button></div>
+            {document.header.mode === "image" ? <div className="upload-card"><span className="upload-card__mark"><ImagePlus size={19} /></span><div><b>صورة ترويسة مستطيلة</b><p>تعرض بارزة داخل مستطيل بحدود وزوايا أنيقة، وتلغي النص والشعار في الترويسة.</p></div><label className="upload-action"><Upload size={14} /> رفع الصورة<input type="file" accept="image/*" onChange={(event) => { const file = event.target.files?.[0]; if (file) readImage(file, "header"); }} /></label>{document.header.imageData && <button className="remove-upload" onClick={() => updateHeader({ mode: "text", imageData: null })}><X size={14} /> إزالة</button>}</div> : <>
+              <label className="field-label">الجهة اليمنى — سطر لكل بند<textarea value={document.header.rightLines.join("\n")} onChange={(event) => updateHeader({ rightLines: event.target.value.split("\n").map((value) => value.trim()).filter(Boolean) })} placeholder={"المملكة العربية السعودية\nوزارة التعليم\nالإدارة العامة بمنطقة ..."} /></label>
+              <label className="field-label">الجهة اليسرى — اسم الملف واسم المدرسة<textarea value={document.header.leftLines.join("\n")} onChange={(event) => updateHeader({ leftLines: event.target.value.split("\n").map((value) => value.trim()).filter(Boolean) })} placeholder={"اسم الملف\nاسم المدرسة"} /></label>
+              <div className="upload-card upload-card--compact"><span className="upload-card__mark"><ImagePlus size={18} /></span><div><b>الشعار المركزي</b><p>صورة مربعة تظهر في المنتصف مع بقاء بيانات الجهتين.</p></div><label className="upload-action"><Upload size={14} /> رفع الشعار<input type="file" accept="image/*" onChange={(event) => { const file = event.target.files?.[0]; if (file) readImage(file, "logo"); }} /></label>{document.header.logoImage?.data && <button className="remove-upload" onClick={() => updateHeader({ logoImage: null })}><X size={14} /> إزالة</button>}</div>
+            </>}
+          </section>
+          <section className="section-block footer-section">
+            <div className="section-title"><div><span className="section-index">03</span><h2>شريط الذيل والتوقيع</h2></div><FileCheck2 size={18} /></div>
+            <p className="section-note">تظهر الوظيفة والاسم في صف واحد متباعد داخل مستطيل علوي الحواف، ويظهر سطر التوقيع عند تفعيله.</p>
+            <div className="signature-inputs">{[0, 1].map((index) => <div className="signature-editor" key={index}><label className="field-label">المسمى الوظيفي<input value={document.footer.signatures[index]?.role || ""} onChange={(event) => updateSignature(index, "role", event.target.value)} placeholder="مثال: قائد المدرسة" /></label><label className="field-label">الاسم<input value={document.footer.signatures[index]?.name || ""} onChange={(event) => updateSignature(index, "name", event.target.value)} placeholder="الاسم" /></label></div>)}</div>
+            <div className="toggle-line"><label><input type="checkbox" checked={document.footer.showSignatureLine} onChange={(event) => updateFooter({ showSignatureLine: event.target.checked })} />إظهار سطر التوقيع</label><label><input type="checkbox" checked={document.footer.showPageNum} onChange={(event) => updateFooter({ showPageNum: event.target.checked })} />إظهار رقم الصفحة</label></div>
+          </section>
+          <section className="section-block typography-section">
+            <div className="section-title"><div><span className="section-index">04</span><h2>الخطوط والعناوين</h2></div><Type size={18} /></div>
+            <div className="control-grid"><label className="field-label">خط المتن<select value={document.styles.bodyFont} onChange={(event) => updateStyles("bodyFont", event.target.value)}>{ARABIC_FONTS.map((font) => <option value={font} key={font}>{font}</option>)}</select></label><label className="field-label">حجم المتن<input type="number" min="10" max="18" value={document.styles.bodySize} onChange={(event) => updateStyles("bodySize", Number(event.target.value))} /></label><label className="field-label">خط العناوين<select value={document.styles.headingFont} onChange={(event) => updateStyles("headingFont", event.target.value)}>{ARABIC_FONTS.map((font) => <option value={font} key={font}>{font}</option>)}</select></label><label className="field-label">حجم العناوين<input type="number" min="13" max="30" value={document.styles.headingSize} onChange={(event) => updateStyles("headingSize", Number(event.target.value))} /></label></div>
+            <label className="field-label heading-color">لون العناوين<input type="color" value={document.styles.headingColor} onChange={(event) => updateStyles("headingColor", event.target.value)} /><span>{document.styles.headingColor}</span></label>
+          </section>
           <section className="section-block">
-            <div className="section-title"><div><span className="section-index">02</span><h2>قالب الإخراج</h2></div><LayoutTemplate size={18} /></div>
+            <div className="section-title"><div><span className="section-index">05</span><h2>قالب الإخراج</h2></div><Palette size={18} /></div>
             <div className="template-list">{(Object.entries(templates) as [TemplateKey, typeof templates[TemplateKey]][]).map(([key, template]) => <button key={key} className={`template-choice ${document.meta.template === key ? "selected" : ""}`} onClick={() => updateMeta("template", key)}><span className="template-swatch" style={{ background: template.ink }} /><span><b>{template.name}</b><small>{template.description}</small></span><ChevronLeft size={16} /></button>)}</div>
           </section>
           <section className="section-block source-summary">
-            <div className="source-summary__top"><div><span className="section-index">03</span><h2>خريطة المحتوى</h2></div><span className="status-dot">بنية نشطة</span></div>
+            <div className="source-summary__top"><div><span className="section-index">06</span><h2>خريطة المحتوى</h2></div><span className="status-dot">بنية نشطة</span></div>
             {document.pages.map((page, pageIndex) => <button className="page-outline" onClick={() => pageRefs.current[pageIndex]?.scrollIntoView({ behavior: "smooth", block: "center" })} key={page.id}><span>ص {pageIndex + 1}</span><div><b>{page.elements.length} عناصر</b><small>{page.elements.slice(0, 2).map(compactText).join(" — ") || "صفحة فارغة"}</small></div></button>)}
           </section>
         </div>}
 
         {activePanel === "schema" && <div className="panel-stack schema-panel">
-          <section className="schema-intro" style={{ backgroundImage: `linear-gradient(90deg, rgba(38,62,85,.96), rgba(38,62,85,.72)), url(${STRUCTURE_URL})` }}><span className="hero-tag hero-tag--dark"><Code2 size={14} /> طبقة المصدر</span><h2>الصق JSON كما هو.</h2><p>تُزال علامات Markdown تلقائيًا، ويجري التحقق من الصفحات والعناصر والجداول قبل لمس المعاينة الحالية.</p></section>
+          <section className="schema-intro" style={{ backgroundImage: `linear-gradient(90deg, rgba(38,62,85,.96), rgba(38,62,85,.72)), url(${STRUCTURE_URL})` }}><span className="hero-tag hero-tag--dark"><Code2 size={14} /> طبقة المصدر</span><h2>لا تحلل الملفات هنا.</h2><p>حلل أي PDF أو صورة في أداة ذكاء خارجية باستخدام البرومبت الصارم، ثم الصق JSON الناتج فقط في هذا المحرر.</p></section>
+          <section className="prompt-card"><div><span className="section-index">EXTERNAL AI / PROMPT</span><h3>برومبت صارم للتحليل صفحةً صفحةً</h3><p>انسخه ثم أرفقه بالملف داخل أداة الذكاء التي تختارها. ستعيد الأداة JSON فقط قابلًا للّصق.</p></div><button onClick={copyPrompt}><Copy size={15} /> نسخ البرومبت</button><textarea readOnly className="prompt-editor" dir="rtl" value={AI_ANALYSIS_PROMPT} aria-label="برومبت تحليل المستند الخارجي" /></section>
           <div className="schema-toolbar"><span className={analysis.ok ? "analysis-ok" : "analysis-error"}>{analysis.ok ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}{analysis.ok ? "البنية قابلة للتطبيق" : "تحتاج البنية إلى تصحيح"}</span><button onClick={loadExample}><FilePlus2 size={15} /> نموذج جاهز</button></div>
           <textarea className="json-editor" dir="ltr" spellCheck={false} value={rawJson} onChange={(event) => setRawJson(event.target.value)} aria-label="محرر JSON" />
           <div className="diagnostic-list">{analysis.issues.length ? analysis.issues.slice(0, 8).map((issue, index) => <div className={`diagnostic ${issue.severity}`} key={`${issue.path}-${index}`}><span>{issue.severity === "error" ? <AlertTriangle size={15} /> : <AlertTriangle size={15} />}</span><div><b>{issue.path}</b><p>{issue.message}</p></div></div>) : <div className="diagnostic success"><CheckCircle2 size={16} /><div><b>فحص بنيوي مكتمل</b><p>المعرّفات فريدة، والعناصر المدعومة قابلة للعرض والطباعة.</p></div></div>}</div>
